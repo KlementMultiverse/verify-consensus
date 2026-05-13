@@ -1,0 +1,16 @@
+{
+  "_comment": "INSTALL: Add these to your ~/.claude.json under the 'mcpServers' key",
+  "mcpServers": {
+    "codex": {
+      "type": "stdio",
+      "command": "codex",
+      "args": ["mcp-server"],
+      "env": {}
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}

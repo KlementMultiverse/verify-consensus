@@ -1,0 +1,178 @@
+---
+description: >
+  MANDATORY for every task. Cross-verifies answers using Codex (OpenAI) as
+  an independent second opinion. Classifies every query as trivial/standard/
+  research, then runs the appropriate verification depth. The Stop hook will
+  block you from finishing without running this. Use for ALL queries — code,
+  research, decisions, learning, startup work, everything.
+allowed-tools:
+  - mcp__codex__codex
+  - mcp__codex__codex-reply
+  - mcp__exa__web_search_exa
+  - mcp__context7__resolve-library-id
+  - mcp__context7__query-docs
+  - WebSearch
+  - WebFetch
+  - Agent
+  - Bash
+  - Write
+  - Read
+---
+
+<!-- INSTALL: Copy this entire folder to ~/.claude/skills/verify-consensus/ -->
+
+# Verify-Consensus Skill
+
+## MANDATORY: Run on EVERY query
+
+The Stop hook at ~/.claude/hooks/stop-verify-gate.sh will BLOCK you from
+finishing unless .claude/verify-state.json exists with either:
+- `"trivial": true` (you classified and skipped), OR
+- 2 consecutive agreements in history, OR
+- iteration >= 6
+
+So you MUST always start by writing the state file.
+
+---
+
+## Step 1: Classify (ALWAYS — first thing you do)
+
+Classify the query complexity and write the state file immediately:
+
+### If TRIVIAL (casual chat, "what was that command", simple lookups, boilerplate):
+Write this state file and proceed to answer directly:
+```json
+{
+  "question": "<user's question summary>",
+  "complexity": "trivial",
+  "trivial": true,
+  "reason": "<why trivial>",
+  "ts": "<ISO timestamp>"
+}
+```
+Then log it:
+```bash
+bash ~/.claude/hooks/log-verify-iteration.sh '{"event":"classify","complexity":"trivial","question":"<summary>"}'
+```
+
+### If STANDARD or RESEARCH:
+Write the initial state file:
+```json
+{
+  "question": "<user's question summary>",
+  "complexity": "standard|research",
+  "trivial": false,
+  "iteration": 0,
+  "history": [],
+  "ts": "<ISO timestamp>"
+}
+```
+
+---
+
+## Step 2: Research (standard/research only)
+
+- Start with broad queries (5 words or fewer), then narrow.
+- For code/API questions: Context7 FIRST (version-pinned docs).
+- For current info: Exa MCP or WebSearch.
+- Every factual claim must have a fetched (not just searched) citation.
+- Prefer primary sources; deprioritize SEO content farms.
+- For research-class: decompose into 2-4 subquestions, spawn parallel Agent subagents.
+
+---
+
+## Step 3: Iterate (max 6 rounds, early-exit on 2 consecutive agreements)
+
+### Each iteration k = 1..6:
+
+**3a. Claude answer.** Synthesize into JSON envelope:
+```json
+{
+  "answer": "<concise final answer>",
+  "key_claims": ["claim 1", "claim 2"],
+  "citations": [{"url": "...", "quote": "..."}],
+  "confidence": 0.0,
+  "disagreements": []
+}
+```
+
+**3b. Codex review.** Use the Codex plugin commands based on classification:
+
+**STANDARD queries -> `/codex:review` (Thinking tier)**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review --wait
+```
+Maps to ChatGPT's "Thinking" intelligence tier.
+
+**RESEARCH queries -> `/codex:adversarial-review --effort xhigh` (Pro tier)**
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review --wait --effort xhigh "<focus text>"
+```
+Maps to ChatGPT's "Pro + Extended thinking" intelligence tier.
+
+**Fallback (if plugin commands fail):** Use `mcp__codex__codex` MCP tool with prompt:
+
+> "You are an adversarial second reviewer. The user asked: <Q>. Another
+> AI produced this answer: <claude_answer>. Independently produce YOUR
+> own answer in the same JSON envelope format. Do NOT merely critique —
+> produce a complete competing answer. Cite sources you can verify. Then
+> in a 'disagreements' field, list every point where you disagree, with
+> severity (low/med/high). Reasoning effort: high."
+
+**3c. Agreement check:**
+- answer_match = substance matches (not exact string)
+- claims_overlap = Jaccard(key_claims) >= 0.8
+- citation_overlap = >= 1 shared URL or equally-authoritative sources
+- no disagreements with severity=high
+- agreed = all of the above
+
+**3d. Log the iteration:**
+```bash
+bash ~/.claude/hooks/log-verify-iteration.sh '{
+  "event": "iteration",
+  "iteration": <k>,
+  "agreed": <true|false>,
+  "claude_confidence": <0.0-1.0>,
+  "codex_confidence": <0.0-1.0>,
+  "high_disagreements": <count>,
+  "question": "<summary>"
+}'
+```
+
+**3e. Update state file:**
+Update .claude/verify-state.json — increment iteration, append to history.
+
+**3f. Stability check (Aegean):**
+If `agreed` AND previous round also `agreed` -> COMMIT. Return final answer.
+
+**3g. Disagreement handling:**
+If not agreed:
+- Surface one-line diff: "Claude says X; Codex says Y."
+- Generate refined search query targeting the disagreement.
+- Re-run search. Continue to k+1.
+
+---
+
+## Step 4: Terminate
+
+### On stable agreement (2 consecutive):
+Update state: `"outcome": "agreed"`. Return verified answer with citations.
+
+### On iteration cap (k=6, still disagreeing):
+Update state: `"outcome": "capped"`. Return BOTH answers with confidence scores.
+DO NOT fabricate consensus.
+
+---
+
+## Review pattern selection (GPT-5.5 Intelligence Tiers)
+
+| Classification | ChatGPT Tier | Codex Plugin Command | When to use |
+|---------------|-------------|---------------------|-------------|
+| **Trivial** | Instant | *skip — no Codex call* | Greetings, confirmations, simple chat |
+| **Standard** | Thinking | `/codex:review --wait` | Daily coding, bug fixes, learning questions |
+| **Research** | Pro (Extended) | `/codex:adversarial-review --wait --effort xhigh` | Architecture, startup decisions, security, research |
+
+### Max retries
+- Up to **6 iteration rounds** to achieve 2 consecutive agreements (Aegean stability)
+- Early exit on 2 consecutive agreements
+- Round 6 without agreement -> return BOTH answers, DO NOT fabricate consensus

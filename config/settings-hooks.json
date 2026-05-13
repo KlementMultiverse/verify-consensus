@@ -1,0 +1,35 @@
+{
+  "_comment": "INSTALL: Merge these hooks into your ~/.claude/settings.json file under the 'hooks' key",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/rotate-logs.sh",
+            "timeout": 5,
+            "statusMessage": "Rotating logs..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/stop-verify-gate.sh",
+            "timeout": 10,
+            "statusMessage": "Checking verification gate..."
+          },
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/log-session-summary.sh",
+            "timeout": 5,
+            "statusMessage": "Logging session summary..."
+          }
+        ]
+      }
+    ]
+  }
+}

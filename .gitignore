@@ -1,0 +1,4 @@
+.claude/verify-state.json
+*.jsonl
+logs/
+node_modules/
