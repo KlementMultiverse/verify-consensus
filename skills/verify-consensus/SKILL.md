@@ -126,7 +126,17 @@ Maps to ChatGPT's "Pro + Extended thinking" intelligence tier.
 - no disagreements with severity=high
 - agreed = all of the above
 
-**3d. Log the iteration:**
+**3d. Generate proof-of-work hash (MANDATORY):**
+
+After receiving Codex output, compute a sha256 hash of the raw response:
+```bash
+CODEX_HASH=$(echo -n "<raw codex response text>" | sha256sum | cut -c1-8)
+```
+This hash is REQUIRED in the iteration log. The stop hook will BLOCK if any
+iteration entry is missing `codex_response_hash`. You CANNOT fake this without
+actually calling Codex — the hook cross-checks log entries against state claims.
+
+**3e. Log the iteration (with proof-of-work):**
 ```bash
 bash ~/.claude/hooks/log-verify-iteration.sh '{
   "event": "iteration",
@@ -134,22 +144,45 @@ bash ~/.claude/hooks/log-verify-iteration.sh '{
   "agreed": <true|false>,
   "claude_confidence": <0.0-1.0>,
   "codex_confidence": <0.0-1.0>,
+  "codex_response_hash": "<8-char sha256 of codex output>",
   "high_disagreements": <count>,
   "question": "<summary>"
 }'
 ```
 
-**3e. Update state file:**
+The logger will REJECT iteration events missing `codex_response_hash`.
+
+**3f. Update state file:**
 Update .claude/verify-state.json — increment iteration, append to history.
 
-**3f. Stability check (Aegean):**
+**3g. Stability check (Aegean):**
 If `agreed` AND previous round also `agreed` -> COMMIT. Return final answer.
 
-**3g. Disagreement handling:**
+**3h. Disagreement handling:**
 If not agreed:
 - Surface one-line diff: "Claude says X; Codex says Y."
 - Generate refined search query targeting the disagreement.
 - Re-run search. Continue to k+1.
+
+---
+
+## Structural Enforcement (v2)
+
+The stop hook enforces these checks deterministically. Claude CANNOT bypass them:
+
+| Check | What the hook verifies | Blocks if |
+|-------|----------------------|-----------|
+| **Log exists** | `.claude/verify-log.jsonl` present | No log file at all |
+| **Codex proof** | At least 1 iteration with `codex_response_hash` | No hashes found (Codex never called) |
+| **Count match** | Log iteration count >= state iteration count | State claims more iterations than log has |
+| **Agreement cross-check** | Last 2 log entries agree = last 2 state entries agree | State says agreed but log disagrees |
+| **Aegean stability** | 2 consecutive `agreed: true` in BOTH state AND log | Only 1 or 0 consecutive agreements |
+
+This means Claude cannot:
+- Write `trivial: true` for non-trivial tasks (user can audit gate logs)
+- Fake iteration history (log entries with hashes are required)
+- Skip Codex calls (no hash = hook blocks)
+- Inflate iteration count (log count must match)
 
 ---
 
