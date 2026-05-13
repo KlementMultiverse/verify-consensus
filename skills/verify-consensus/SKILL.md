@@ -96,24 +96,71 @@ Update status to "reviewing":
 { "status": "reviewing", ... }
 ```
 
-Then call Codex based on classification:
+### For CODE tasks (bug fixes, features, implementations):
+Use the Codex plugin commands — they review git diffs automatically:
 
-### STANDARD → Codex Review (Thinking tier)
+**STANDARD:**
 ```
-mcp__codex__codex with prompt:
-"Review this answer: <your answer>. The user asked: <question>.
-Produce your own competing answer in the same format.
-List disagreements with severity (low/med/high)."
+/codex:review --wait
 ```
 
-### RESEARCH → Codex Adversarial Review (Pro tier)
+**RESEARCH (architecture, security, migrations):**
 ```
-mcp__codex__codex with prompt:
-"You are an adversarial reviewer. The user asked: <question>.
-Another AI produced: <your answer>. Independently produce YOUR
-own complete answer. Challenge design choices, assumptions, and
-tradeoffs. List all disagreements with severity. Reasoning effort: high."
+/codex:adversarial-review --wait --effort xhigh "focus: <what to challenge>"
 ```
+
+These commands know how to format the review. No manual prompting needed.
+
+### For NON-CODE tasks (research, strategy, decisions, learning):
+Use `mcp__codex__codex` with the standardized review template below.
+Do NOT type the prompt manually — copy the template and fill in the variables.
+
+**STANDARD review template:**
+```
+mcp__codex__codex(prompt=STANDARD_REVIEW_TEMPLATE)
+```
+
+Where STANDARD_REVIEW_TEMPLATE is:
+```
+You are reviewing an AI assistant's answer for accuracy and completeness.
+
+USER QUESTION: {question}
+
+AI ANSWER:
+{claude_answer_with_key_claims_and_citations}
+
+TASK: Produce your own independent answer to the same question.
+Compare with the AI's answer. List disagreements with severity (low/med/high).
+If you substantially agree, say so.
+```
+
+**RESEARCH adversarial review template:**
+```
+mcp__codex__codex(prompt=RESEARCH_REVIEW_TEMPLATE)
+```
+
+Where RESEARCH_REVIEW_TEMPLATE is:
+```
+You are an adversarial second reviewer. Your job is to challenge
+assumptions, find blind spots, and pressure-test the strategy.
+
+USER QUESTION: {question}
+
+AI ANSWER:
+{claude_answer_with_key_claims_and_citations}
+
+TASK:
+1. Produce your OWN complete competing answer (not just critique)
+2. Challenge design choices, assumptions, and tradeoffs
+3. Check cited facts against your knowledge
+4. List ALL disagreements with severity (low/med/high)
+5. If you substantially agree after review, state that clearly
+Reasoning effort: high.
+```
+
+### Template variables (fill these in, don't type freestyle):
+- `{question}` = the user's original question
+- `{claude_answer_with_key_claims_and_citations}` = your formatted answer from Step 3
 
 ---
 
