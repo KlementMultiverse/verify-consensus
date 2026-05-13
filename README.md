@@ -263,6 +263,35 @@ All escape hatches are user-controlled. Claude cannot invoke them.
 
 ---
 
+## Phase System (v3)
+
+Non-trivial tasks move through deterministic phases. Claude can pause at each phase for user interaction, but cannot deliver a final answer until the loop completes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> classifying: Step 1: Classify query
+    classifying --> researching: User confirms classification
+    researching --> iterating: Citations gathered
+    iterating --> iterating: Codex round (k+1)
+    iterating --> complete: 2 consecutive agreements OR 6 rounds
+    complete --> [*]: Answer delivered
+
+    note right of classifying: Hook ALLOWS stop (temporary)
+    note right of researching: Hook ALLOWS stop (temporary)
+    note right of iterating: Hook ALLOWS stop (temporary)
+    note right of complete: Hook ALLOWS stop (permanent, proof verified)
+```
+
+| Phase | Hook allows stop? | Can deliver answer? |
+|-------|-------------------|-------------------|
+| `classifying` | Yes | No — only show classification |
+| `researching` | Yes | No — only show citations |
+| `iterating` | Yes | No — only show iteration progress |
+| `complete` | Yes (with full proof-of-work) | **Yes** |
+| *(missing)* | **BLOCK** | No |
+
+---
+
 ## Structural Enforcement (v2)
 
 The v1 system had a flaw: Claude writes the state file AND controls the iteration data. It could write `trivial: true` on anything or fake iteration history. **v2 fixes this** with deterministic proof-of-work checks.

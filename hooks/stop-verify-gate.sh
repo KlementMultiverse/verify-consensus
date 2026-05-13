@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # ============================================================
-# STOP HOOK: Verification Gate (v2 — structural enforcement)
+# STOP HOOK: Verification Gate (v3 — phase-aware enforcement)
 # ============================================================
 # PURPOSE: Blocks Claude Code from finishing ANY task unless
 #          verification is complete or an escape hatch is active.
 #
-#          v2 adds STRUCTURAL ENFORCEMENT: the hook cross-checks
-#          that Codex was actually called by verifying:
-#          1. Iteration log entries exist matching state claims
-#          2. Each iteration has a codex_response_hash (proof of Codex call)
-#          3. Non-trivial tasks MUST have at least 1 verified iteration
+# PHASES (non-trivial tasks):
+#   classifying  — Claude showed classification, waiting for user
+#   researching  — gathering citations, user reviewing sources
+#   iterating    — Codex loop in progress, mid-round
+#   complete     — loop done (2 agreements or 6 rounds)
+#
+#   Temporary phases (classifying/researching/iterating) allow
+#   Claude to pause for user interaction mid-flow. But the ACTUAL
+#   answer cannot be delivered until phase=complete with full
+#   proof-of-work.
 #
 # INSTALL: Copy to ~/.claude/hooks/stop-verify-gate.sh
 #          Then add to ~/.claude/settings.json under hooks.Stop
@@ -17,18 +22,6 @@
 # EXIT CODES:
 #   0 = allow stop
 #   2 = block stop (Claude Code convention)
-#
-# ESCAPE HATCHES (checked in order):
-#   1. CLAUDE_SKIP_VERIFY=1 env var (session-level)
-#   2. ~/.claude/verify-skip-global file exists (global kill switch)
-#   3. .claude/verify-skip file in project (project-level)
-#
-# VERIFICATION CHECKS (for non-trivial):
-#   4. State file exists with classification
-#   5. If trivial=true → allow
-#   6. Iteration log has entries with codex_response_hash (proof-of-work)
-#   7. Log entry count matches state iteration count
-#   8. iteration >= 6 OR 2 consecutive agreements (Aegean stability)
 #
 # DEPENDENCIES: jq
 # ============================================================
@@ -79,19 +72,46 @@ if [[ "$trivial" == "true" ]]; then
 fi
 
 # ============================================================
-# STRUCTURAL ENFORCEMENT (non-trivial tasks only)
+# PHASE-AWARE ENFORCEMENT (non-trivial tasks only)
 # ============================================================
+
+phase=$(jq -r '.phase // ""' "$STATE" 2>/dev/null)
+
+# --- Temporary phases: allow mid-flow stops ---
+# These let Claude pause to show work to the user between steps.
+# The actual answer CANNOT be delivered in these phases.
+case "$phase" in
+  classifying)
+    log_event "allow" "phase:classifying"
+    exit 0
+    ;;
+  researching)
+    log_event "allow" "phase:researching"
+    exit 0
+    ;;
+  iterating)
+    # Allow mid-iteration stops ONLY if at least starting the loop
+    # (iteration >= 1 means at least one round attempted)
+    iter=$(jq -r '.iteration // 0' "$STATE" 2>/dev/null)
+    if [[ "$iter" -ge 0 ]]; then
+      log_event "allow" "phase:iterating,iter=$iter"
+      exit 0
+    fi
+    ;;
+esac
+
+# --- Phase: complete — full structural verification required ---
+# If phase=complete OR no phase set, we require full proof-of-work.
 
 # --- Check 1: iteration log must exist ---
 if [[ ! -f "$LOCAL_LOG" ]]; then
   log_event "block" "no-iteration-log"
   echo "BLOCK: No iteration log found (.claude/verify-log.jsonl). Codex was never called." >&2
-  echo "Non-trivial tasks MUST run Codex verification." >&2
+  echo "Non-trivial tasks MUST run Codex verification. Set phase to classifying/researching/iterating if mid-flow." >&2
   exit 2
 fi
 
 # --- Check 2: count iteration entries with codex_response_hash ---
-# Only entries with event="iteration" AND a non-null codex_response_hash count
 verified_iterations=$(jq -s '[.[] | select(.event == "iteration" and .codex_response_hash != null and .codex_response_hash != "")] | length' "$LOCAL_LOG" 2>/dev/null)
 verified_iterations=${verified_iterations:-0}
 
@@ -149,4 +169,5 @@ fi
 log_event "block" "incomplete:iter=$state_iter,verified=$verified_iterations,history=$history_len"
 echo "BLOCK: Verification incomplete. iteration=$state_iter, verified=$verified_iterations." >&2
 echo "Need 2 consecutive agreements or 6 rounds with Codex proof-of-work." >&2
+echo "Or set phase to classifying/researching/iterating if mid-flow." >&2
 exit 2

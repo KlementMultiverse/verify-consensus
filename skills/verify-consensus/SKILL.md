@@ -56,21 +56,44 @@ bash ~/.claude/hooks/log-verify-iteration.sh '{"event":"classify","complexity":"
 ```
 
 ### If STANDARD or RESEARCH:
-Write the initial state file:
+Write the initial state file with `phase: "classifying"`:
 ```json
 {
   "question": "<user's question summary>",
   "complexity": "standard|research",
   "trivial": false,
+  "phase": "classifying",
   "iteration": 0,
   "history": [],
   "ts": "<ISO timestamp>"
 }
 ```
 
+Present the classification to the user. Wait for confirmation before proceeding.
+
+---
+
+## Phase System (v3)
+
+Non-trivial tasks move through phases. The stop hook allows mid-flow
+pauses in temporary phases so Claude can show work and get user approval.
+
+| Phase | When | Hook allows stop? | Can deliver answer? |
+|-------|------|-------------------|-------------------|
+| `classifying` | After Step 1, waiting for user to confirm classification | Yes | No |
+| `researching` | After Step 2, showing citations to user | Yes | No |
+| `iterating` | During Step 3, Codex loop in progress | Yes | No |
+| `complete` | After Step 4, full proof-of-work verified | Yes | **Yes** |
+| *(missing/empty)* | No phase on non-trivial task | **BLOCK** | No |
+
+**Update the phase in the state file as you move between steps.**
+The stop hook reads the phase field to decide whether to allow or block.
+
 ---
 
 ## Step 2: Research (standard/research only)
+
+Update phase to `"researching"` in state file before starting research.
 
 - Start with broad queries (5 words or fewer), then narrow.
 - For code/API questions: Context7 FIRST (version-pinned docs).
