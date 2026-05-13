@@ -76,16 +76,44 @@ Do ALL your work first. Use every tool you need:
 
 ---
 
-## Step 3: Prepare Final Answer
+## Step 3: Write Context File + Prepare Answer
 
-When your work is done, prepare your answer for review. Format key claims:
-```json
-{
-  "answer": "<your final answer summary>",
-  "key_claims": ["claim 1", "claim 2", ...],
-  "citations": [{"url": "...", "quote": "..."}]
-}
+When your work is done, write `.claude/verify-context.md` with ALL context
+Codex needs. This is the BRIDGE — Codex can't see your files or conversation,
+so everything it needs must go in this file.
+
+```markdown
+<!-- .claude/verify-context.md -->
+
+## Question
+<user's original question, verbatim>
+
+## Classification
+<standard or research>
+
+## Context
+<any background Codex needs to review properly:
+- relevant file contents (paste key sections)
+- conversation history summary
+- user's constraints or preferences
+- project context>
+
+## Answer
+<your full answer>
+
+## Key Claims
+1. <claim 1>
+2. <claim 2>
+...
+
+## Citations
+- [source](url): "supporting quote"
+...
 ```
+
+**IMPORTANT:** Include enough context that Codex can review WITHOUT access to
+your files, conversation, or local state. If you summarized a PDF, include the
+key facts. If you made architecture decisions, include the constraints.
 
 ---
 
@@ -109,45 +137,33 @@ Use the Codex plugin commands — they review git diffs automatically:
 /codex:adversarial-review --wait --effort xhigh "focus: <what to challenge>"
 ```
 
-These commands know how to format the review. No manual prompting needed.
+These commands see the actual code diff. No context file needed.
 
 ### For NON-CODE tasks (research, strategy, decisions, learning):
-Use `mcp__codex__codex` with the standardized review template below.
-Do NOT type the prompt manually — copy the template and fill in the variables.
+Use `mcp__codex__codex` and pass the content of `.claude/verify-context.md`
+as the prompt input. The context file ensures Codex has everything it needs.
 
-**STANDARD review template:**
+**STANDARD:**
 ```
-mcp__codex__codex(prompt=STANDARD_REVIEW_TEMPLATE)
+mcp__codex__codex(prompt=<contents of .claude/verify-context.md> + STANDARD_REVIEW_INSTRUCTION)
 ```
 
-Where STANDARD_REVIEW_TEMPLATE is:
+Where STANDARD_REVIEW_INSTRUCTION is:
 ```
-You are reviewing an AI assistant's answer for accuracy and completeness.
-
-USER QUESTION: {question}
-
-AI ANSWER:
-{claude_answer_with_key_claims_and_citations}
-
 TASK: Produce your own independent answer to the same question.
 Compare with the AI's answer. List disagreements with severity (low/med/high).
 If you substantially agree, say so.
 ```
 
-**RESEARCH adversarial review template:**
+**RESEARCH:**
 ```
-mcp__codex__codex(prompt=RESEARCH_REVIEW_TEMPLATE)
+mcp__codex__codex(prompt=<contents of .claude/verify-context.md> + RESEARCH_REVIEW_INSTRUCTION)
 ```
 
-Where RESEARCH_REVIEW_TEMPLATE is:
+Where RESEARCH_REVIEW_INSTRUCTION is:
 ```
 You are an adversarial second reviewer. Your job is to challenge
 assumptions, find blind spots, and pressure-test the strategy.
-
-USER QUESTION: {question}
-
-AI ANSWER:
-{claude_answer_with_key_claims_and_citations}
 
 TASK:
 1. Produce your OWN complete competing answer (not just critique)
