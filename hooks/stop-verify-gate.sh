@@ -77,7 +77,9 @@ case "$complexity" in
   trivial|standard|research) ;;  # valid
   *)
     log_event "block" "invalid-complexity:$complexity"
-    echo "BLOCK: Invalid complexity '$complexity'. Must be trivial, standard, or research." >&2
+    echo "BLOCK: Invalid complexity '$complexity'." >&2
+    echo "RETRY: Reclassify with exactly one of: trivial | standard | research" >&2
+    echo "Rewrite .claude/verify-state.json with a valid complexity and try again." >&2
     exit 2
     ;;
 esac
@@ -85,12 +87,14 @@ esac
 # --- Validate trivial flag matches complexity ---
 if [[ "$complexity" == "trivial" && "$trivial" != "true" ]]; then
   log_event "block" "complexity-trivial-mismatch:complexity=trivial,trivial=$trivial"
-  echo "BLOCK: complexity=trivial but trivial flag is not true. Inconsistent state." >&2
+  echo "BLOCK: complexity=trivial but trivial flag is not true." >&2
+  echo "RETRY: Set trivial=true when complexity=trivial, or reclassify as: standard | research" >&2
   exit 2
 fi
 if [[ "$complexity" != "trivial" && "$trivial" == "true" ]]; then
   log_event "block" "complexity-trivial-mismatch:complexity=$complexity,trivial=true"
   echo "BLOCK: complexity=$complexity but trivial=true. Cannot mark non-trivial as trivial." >&2
+  echo "RETRY: Set trivial=false for $complexity, or reclassify as: trivial (only if genuinely trivial)" >&2
   exit 2
 fi
 
@@ -111,13 +115,14 @@ case "$phase" in
   classifying|researching|iterating|complete) ;;  # valid
   "")
     log_event "block" "missing-phase:complexity=$complexity"
-    echo "BLOCK: Non-trivial task (complexity=$complexity) has no phase. Phase is required." >&2
-    echo "Valid phases: classifying, researching, iterating, complete" >&2
+    echo "BLOCK: Non-trivial task (complexity=$complexity) has no phase." >&2
+    echo "RETRY: Add phase to .claude/verify-state.json. Pick exactly one of: classifying | researching | iterating | complete" >&2
     exit 2
     ;;
   *)
     log_event "block" "invalid-phase:$phase"
-    echo "BLOCK: Invalid phase '$phase'. Must be classifying, researching, iterating, or complete." >&2
+    echo "BLOCK: Invalid phase '$phase'." >&2
+    echo "RETRY: Rewrite phase in .claude/verify-state.json. Pick exactly one of: classifying | researching | iterating | complete" >&2
     exit 2
     ;;
 esac

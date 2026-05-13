@@ -91,6 +91,18 @@ Any other value (empty, typo, made-up) is rejected.
 
 Nothing can fall outside these categories. The hook rejects anything unknown.
 
+### Retry rule (MANDATORY)
+
+If the stop hook blocks with a RETRY message:
+1. **Read the RETRY instruction** — it tells you exactly what's wrong
+2. **Rewrite .claude/verify-state.json** with a valid value from the allowed set
+3. **Do NOT escape** — never use `touch .claude/verify-skip` to bypass a validation block
+4. **Do NOT invent new categories** — pick strictly from the allowed values
+5. Every query MUST land in one of: `trivial | standard | research`
+6. Every non-trivial phase MUST be one of: `classifying | researching | iterating | complete`
+
+The hook will keep blocking until the state file is valid. There is no way around this.
+
 ---
 
 ## Phase System (v3)
