@@ -26,66 +26,72 @@ Claude Code answers questions, writes code, and makes architectural decisions. B
 
 ---
 
-## Architecture
+## Architecture (v4 — Work First, Review After)
 
 ```mermaid
 flowchart TD
     A[User Query] --> B{Claude Classifies}
 
-    B -->|Trivial| C[Write state: trivial=true]
+    B -->|Trivial| C["Write state: trivial=true, status=verified"]
     C --> D[Answer directly]
     D --> S1{Stop Hook}
     S1 -->|trivial=true| ALLOW1[ALLOW]
 
-    B -->|Standard| E[Write state: trivial=false]
+    B -->|Standard| E["Write state: status=working"]
     B -->|Research| E
 
-    E --> F[Research: Context7 / Exa / WebSearch]
-    F --> G[Claude produces answer envelope]
+    E --> F["Claude works freely (tools, agents, code, research)"]
+    F --> G[Final answer ready]
 
-    G --> H{Standard or Research?}
-    H -->|Standard| I["Codex review (Thinking tier)"]
-    H -->|Research| J["Codex adversarial review (Pro tier)"]
+    G --> H["Update status=reviewing"]
+    H --> I{Standard or Research?}
+    I -->|Standard| J["Codex review (Thinking tier)"]
+    I -->|Research| K["Codex adversarial review (Pro tier)"]
 
-    I --> K{Agreement check}
-    J --> K
+    J --> L{Agreement check}
+    K --> L
 
-    K -->|Agreed| L{2 consecutive?}
-    L -->|Yes| M[Return verified answer]
-    L -->|No| G
+    L -->|Agreed| M{2 consecutive?}
+    M -->|Yes| N["status=verified → Deliver answer"]
+    M -->|No| O[Refine answer] --> H
 
-    K -->|Disagreed| N{Round >= 6?}
-    N -->|No| O[Surface diff, refine search]
-    O --> G
-    N -->|Yes| P[Return BOTH answers]
+    L -->|Disagreed| P{Round >= 6?}
+    P -->|No| O
+    P -->|Yes| Q["status=capped → Deliver BOTH answers"]
 
-    M --> S2{Stop Hook}
-    P --> S2
-    S2 -->|criteria met| ALLOW2[ALLOW]
-    S2 -->|not met| BLOCK[BLOCK]
+    N --> S2{Stop Hook}
+    Q --> S2
+    S2 -->|status=verified/capped + proof| ALLOW2[ALLOW]
+    S2 -->|not verified| BLOCK[BLOCK]
 
     style ALLOW1 fill:#2d6a4f,color:#fff
     style ALLOW2 fill:#2d6a4f,color:#fff
     style BLOCK fill:#9d0208,color:#fff
 ```
 
+### Key difference from v1-v3
+
+Claude does ALL its work first (tools, agents, research, code) without interruption. Codex only enters AFTER the work is done, as a reviewer of the finished output.
+
 ### Hook enforcement flow
 
 ```mermaid
 flowchart LR
-    STOP[Claude tries to stop] --> H1{verify-skip-global?}
-    H1 -->|exists| A1[ALLOW]
-    H1 -->|no| H2{.claude/verify-skip?}
-    H2 -->|exists| A2[ALLOW]
-    H2 -->|no| H3{State file exists?}
-    H3 -->|no| B1[BLOCK]
+    STOP[Claude tries to stop] --> H1{Escape hatches?}
+    H1 -->|yes| A1[ALLOW]
+    H1 -->|no| H2{State file exists?}
+    H2 -->|no| B1[BLOCK]
+    H2 -->|yes| H3{Valid complexity?}
+    H3 -->|no| B2["BLOCK + RETRY"]
     H3 -->|yes| H4{trivial=true?}
-    H4 -->|yes| A3[ALLOW]
-    H4 -->|no| H5{iteration >= 6?}
-    H5 -->|yes| A4[ALLOW]
-    H5 -->|no| H6{2 consecutive agreements?}
-    H6 -->|yes| A5[ALLOW]
-    H6 -->|no| B2[BLOCK]
+    H4 -->|yes| A2[ALLOW]
+    H4 -->|no| H5{status=working?}
+    H5 -->|yes| A3["ALLOW (still working)"]
+    H5 -->|no| H6{status=reviewing?}
+    H6 -->|yes| A4["ALLOW (review in progress)"]
+    H6 -->|no| H7{status=verified + proof?}
+    H7 -->|yes| A5[ALLOW]
+    H7 -->|no| B3[BLOCK]
 
     style A1 fill:#2d6a4f,color:#fff
     style A2 fill:#2d6a4f,color:#fff
@@ -94,7 +100,18 @@ flowchart LR
     style A5 fill:#2d6a4f,color:#fff
     style B1 fill:#9d0208,color:#fff
     style B2 fill:#9d0208,color:#fff
+    style B3 fill:#9d0208,color:#fff
 ```
+
+### Status lifecycle
+
+| Status | Meaning | Hook allows? |
+|--------|---------|-------------|
+| `working` | Claude is doing work (tools, agents, code) | Yes |
+| `reviewing` | Codex review in progress | Yes |
+| `verified` | 2 consecutive agreements, proof-of-work confirmed | Yes |
+| `capped` | 6 rounds without consensus, both answers returned | Yes |
+| *(missing)* | No status on non-trivial task | **BLOCK** |
 
 ---
 

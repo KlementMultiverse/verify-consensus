@@ -1,10 +1,8 @@
 ---
 description: >
-  MANDATORY for every task. Cross-verifies answers using Codex (OpenAI) as
-  an independent second opinion. Classifies every query as trivial/standard/
-  research, then runs the appropriate verification depth. The Stop hook will
-  block you from finishing without running this. Use for ALL queries — code,
-  research, decisions, learning, startup work, everything.
+  Cross-verifies Claude Code answers using Codex (OpenAI) as an independent
+  second opinion. Classifies queries, lets Claude work freely, then runs
+  Codex review AFTER work is done. The Stop hook blocks until verified.
 allowed-tools:
   - mcp__codex__codex
   - mcp__codex__codex-reply
@@ -21,246 +19,178 @@ allowed-tools:
 
 <!-- INSTALL: Copy this entire folder to ~/.claude/skills/verify-consensus/ -->
 
-# Verify-Consensus Skill
+# Verify-Consensus Skill (v4 — Work First, Review After)
 
-## MANDATORY: Run on EVERY query
+## The Rule
 
-The Stop hook at ~/.claude/hooks/stop-verify-gate.sh will BLOCK you from
-finishing unless .claude/verify-state.json exists with either:
-- `"trivial": true` (you classified and skipped), OR
-- 2 consecutive agreements in history, OR
-- iteration >= 6
+Claude works freely. Codex reviews AFTER. Not during.
 
-So you MUST always start by writing the state file.
+```
+Query → Classify → Claude works (tools, agents, code, everything)
+      → Answer ready → Codex reviews finished output
+      → 2 consecutive agreements → Done
+```
 
 ---
 
-## Step 1: Classify (ALWAYS — first thing you do)
+## Step 1: Classify (FIRST action, every query)
 
-Classify the query complexity and write the state file immediately:
+Write `.claude/verify-state.json` immediately:
 
-### If TRIVIAL (casual chat, "what was that command", simple lookups, boilerplate):
-Write this state file and proceed to answer directly:
+### TRIVIAL (greetings, chat, simple lookups, boilerplate):
 ```json
 {
-  "question": "<user's question summary>",
+  "question": "<summary>",
   "complexity": "trivial",
   "trivial": true,
-  "reason": "<why trivial>",
+  "status": "verified",
   "ts": "<ISO timestamp>"
 }
 ```
-Then log it:
-```bash
-bash ~/.claude/hooks/log-verify-iteration.sh '{"event":"classify","complexity":"trivial","question":"<summary>"}'
-```
+Then work and answer normally. No Codex review needed.
 
-### If STANDARD or RESEARCH:
-Write the initial state file with `phase: "classifying"`:
+### STANDARD or RESEARCH:
 ```json
 {
-  "question": "<user's question summary>",
+  "question": "<summary>",
   "complexity": "standard|research",
   "trivial": false,
-  "phase": "classifying",
+  "status": "working",
   "iteration": 0,
   "history": [],
   "ts": "<ISO timestamp>"
 }
 ```
 
-Present the classification to the user. Wait for confirmation before proceeding.
+---
+
+## Step 2: Work Freely
+
+Do ALL your work first. Use every tool you need:
+- Read files, write code, run tests
+- Spawn agents, search the web
+- Research with Context7, Exa, WebSearch
+- Build, debug, deploy — whatever the task needs
+
+**Do NOT call Codex during this phase.** Focus on producing the best answer.
 
 ---
 
-## Classification Validation (enforced by hook)
+## Step 3: Prepare Final Answer
 
-The stop hook validates EVERY state file. Invalid values = BLOCK.
-
-**Complexity** must be exactly one of: `trivial`, `standard`, `research`.
-Any other value (empty, typo, made-up) is rejected.
-
-**Trivial consistency:**
-- If `complexity: "trivial"` then `trivial` MUST be `true`
-- If `complexity: "standard"` or `"research"` then `trivial` MUST be `false`
-- Mismatch = BLOCK (prevents marking real queries as trivial)
-
-**Phase** must be exactly one of: `classifying`, `researching`, `iterating`, `complete`.
-- Non-trivial tasks with missing or unknown phase = BLOCK
-- Trivial tasks ignore phase entirely
-
-Nothing can fall outside these categories. The hook rejects anything unknown.
-
-### Retry rule (MANDATORY)
-
-If the stop hook blocks with a RETRY message:
-1. **Read the RETRY instruction** — it tells you exactly what's wrong
-2. **Rewrite .claude/verify-state.json** with a valid value from the allowed set
-3. **Do NOT escape** — never use `touch .claude/verify-skip` to bypass a validation block
-4. **Do NOT invent new categories** — pick strictly from the allowed values
-5. Every query MUST land in one of: `trivial | standard | research`
-6. Every non-trivial phase MUST be one of: `classifying | researching | iterating | complete`
-
-The hook will keep blocking until the state file is valid. There is no way around this.
-
----
-
-## Phase System (v3)
-
-Non-trivial tasks move through phases. The stop hook allows mid-flow
-pauses in temporary phases so Claude can show work and get user approval.
-
-| Phase | When | Hook allows stop? | Can deliver answer? |
-|-------|------|-------------------|-------------------|
-| `classifying` | After Step 1, waiting for user to confirm classification | Yes | No |
-| `researching` | After Step 2, showing citations to user | Yes | No |
-| `iterating` | During Step 3, Codex loop in progress | Yes | No |
-| `complete` | After Step 4, full proof-of-work verified | Yes | **Yes** |
-| *(missing/empty)* | No phase on non-trivial task | **BLOCK** | No |
-
-**Update the phase in the state file as you move between steps.**
-The stop hook reads the phase field to decide whether to allow or block.
-
----
-
-## Step 2: Research (standard/research only)
-
-Update phase to `"researching"` in state file before starting research.
-
-- Start with broad queries (5 words or fewer), then narrow.
-- For code/API questions: Context7 FIRST (version-pinned docs).
-- For current info: Exa MCP or WebSearch.
-- Every factual claim must have a fetched (not just searched) citation.
-- Prefer primary sources; deprioritize SEO content farms.
-- For research-class: decompose into 2-4 subquestions, spawn parallel Agent subagents.
-
----
-
-## Step 3: Iterate (max 6 rounds, early-exit on 2 consecutive agreements)
-
-### Each iteration k = 1..6:
-
-**3a. Claude answer.** Synthesize into JSON envelope:
+When your work is done, prepare your answer for review. Format key claims:
 ```json
 {
-  "answer": "<concise final answer>",
-  "key_claims": ["claim 1", "claim 2"],
-  "citations": [{"url": "...", "quote": "..."}],
-  "confidence": 0.0,
-  "disagreements": []
+  "answer": "<your final answer summary>",
+  "key_claims": ["claim 1", "claim 2", ...],
+  "citations": [{"url": "...", "quote": "..."}]
 }
 ```
 
-**3b. Codex review.** Use the Codex plugin commands based on classification:
+---
 
-**STANDARD queries -> `/codex:review` (Thinking tier)**
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" review --wait
+## Step 4: Run Codex Review
+
+Update status to "reviewing":
+```json
+{ "status": "reviewing", ... }
 ```
-Maps to ChatGPT's "Thinking" intelligence tier.
 
-**RESEARCH queries -> `/codex:adversarial-review --effort xhigh` (Pro tier)**
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" adversarial-review --wait --effort xhigh "<focus text>"
+Then call Codex based on classification:
+
+### STANDARD → Codex Review (Thinking tier)
 ```
-Maps to ChatGPT's "Pro + Extended thinking" intelligence tier.
-
-**Fallback (if plugin commands fail):** Use `mcp__codex__codex` MCP tool with prompt:
-
-> "You are an adversarial second reviewer. The user asked: <Q>. Another
-> AI produced this answer: <claude_answer>. Independently produce YOUR
-> own answer in the same JSON envelope format. Do NOT merely critique —
-> produce a complete competing answer. Cite sources you can verify. Then
-> in a 'disagreements' field, list every point where you disagree, with
-> severity (low/med/high). Reasoning effort: high."
-
-**3c. Agreement check:**
-- answer_match = substance matches (not exact string)
-- claims_overlap = Jaccard(key_claims) >= 0.8
-- citation_overlap = >= 1 shared URL or equally-authoritative sources
-- no disagreements with severity=high
-- agreed = all of the above
-
-**3d. Generate proof-of-work hash (MANDATORY):**
-
-After receiving Codex output, compute a sha256 hash of the raw response:
-```bash
-CODEX_HASH=$(echo -n "<raw codex response text>" | sha256sum | cut -c1-8)
+mcp__codex__codex with prompt:
+"Review this answer: <your answer>. The user asked: <question>.
+Produce your own competing answer in the same format.
+List disagreements with severity (low/med/high)."
 ```
-This hash is REQUIRED in the iteration log. The stop hook will BLOCK if any
-iteration entry is missing `codex_response_hash`. You CANNOT fake this without
-actually calling Codex — the hook cross-checks log entries against state claims.
 
-**3e. Log the iteration (with proof-of-work):**
+### RESEARCH → Codex Adversarial Review (Pro tier)
+```
+mcp__codex__codex with prompt:
+"You are an adversarial reviewer. The user asked: <question>.
+Another AI produced: <your answer>. Independently produce YOUR
+own complete answer. Challenge design choices, assumptions, and
+tradeoffs. List all disagreements with severity. Reasoning effort: high."
+```
+
+---
+
+## Step 5: Agreement Check
+
+After each Codex response:
+
+1. **Compute proof-of-work hash:**
+```bash
+CODEX_HASH=$(echo -n "<raw codex response>" | sha256sum | cut -c1-8)
+```
+
+2. **Check agreement:**
+   - answer_match: substance agrees (not exact string)
+   - claims_overlap: Jaccard >= 0.8
+   - no high-severity disagreements
+   - agreed = all pass
+
+3. **Log iteration:**
 ```bash
 bash ~/.claude/hooks/log-verify-iteration.sh '{
   "event": "iteration",
   "iteration": <k>,
   "agreed": <true|false>,
-  "claude_confidence": <0.0-1.0>,
-  "codex_confidence": <0.0-1.0>,
-  "codex_response_hash": "<8-char sha256 of codex output>",
-  "high_disagreements": <count>,
+  "codex_response_hash": "<8-char hash>",
   "question": "<summary>"
 }'
 ```
 
-The logger will REJECT iteration events missing `codex_response_hash`.
+4. **Update state:** increment iteration, append to history
 
-**3f. Update state file:**
-Update .claude/verify-state.json — increment iteration, append to history.
+5. **Check Aegean stability:** if agreed AND previous round agreed → DONE
 
-**3g. Stability check (Aegean):**
-If `agreed` AND previous round also `agreed` -> COMMIT. Return final answer.
-
-**3h. Disagreement handling:**
-If not agreed:
-- Surface one-line diff: "Claude says X; Codex says Y."
-- Generate refined search query targeting the disagreement.
-- Re-run search. Continue to k+1.
+6. **If disagreed:** refine answer incorporating Codex feedback → re-run review (max 6 rounds)
 
 ---
 
-## Structural Enforcement (v2)
+## Step 6: Complete
 
-The stop hook enforces these checks deterministically. Claude CANNOT bypass them:
+### On 2 consecutive agreements:
+Update state: `"status": "verified"`
+Log: `{"event": "complete", "outcome": "agreed"}`
+Deliver the verified answer.
 
-| Check | What the hook verifies | Blocks if |
-|-------|----------------------|-----------|
-| **Log exists** | `.claude/verify-log.jsonl` present | No log file at all |
-| **Codex proof** | At least 1 iteration with `codex_response_hash` | No hashes found (Codex never called) |
-| **Count match** | Log iteration count >= state iteration count | State claims more iterations than log has |
-| **Agreement cross-check** | Last 2 log entries agree = last 2 state entries agree | State says agreed but log disagrees |
-| **Aegean stability** | 2 consecutive `agreed: true` in BOTH state AND log | Only 1 or 0 consecutive agreements |
-
-This means Claude cannot:
-- Write `trivial: true` for non-trivial tasks (user can audit gate logs)
-- Fake iteration history (log entries with hashes are required)
-- Skip Codex calls (no hash = hook blocks)
-- Inflate iteration count (log count must match)
+### On 6 rounds without consensus:
+Update state: `"status": "capped"`
+Log: `{"event": "complete", "outcome": "capped"}`
+Deliver BOTH answers. Do NOT fabricate consensus.
 
 ---
 
-## Step 4: Terminate
+## Classification Validation (enforced by hook)
 
-### On stable agreement (2 consecutive):
-Update state: `"outcome": "agreed"`. Return verified answer with citations.
+**Complexity** must be: `trivial | standard | research` (else BLOCK + RETRY)
+**Trivial consistency:** complexity=trivial ↔ trivial=true (else BLOCK)
+**Status** must be: `working | reviewing | verified | capped` (else BLOCK)
 
-### On iteration cap (k=6, still disagreeing):
-Update state: `"outcome": "capped"`. Return BOTH answers with confidence scores.
-DO NOT fabricate consensus.
+### Retry rule
+If hook blocks: read the RETRY instruction, fix the state file, try again.
+Never bypass with escape hatches to avoid validation.
 
 ---
 
-## Review pattern selection (GPT-5.5 Intelligence Tiers)
+## Review Pattern Selection (GPT-5.5 Tiers)
 
-| Classification | ChatGPT Tier | Codex Plugin Command | When to use |
-|---------------|-------------|---------------------|-------------|
-| **Trivial** | Instant | *skip — no Codex call* | Greetings, confirmations, simple chat |
-| **Standard** | Thinking | `/codex:review --wait` | Daily coding, bug fixes, learning questions |
-| **Research** | Pro (Extended) | `/codex:adversarial-review --wait --effort xhigh` | Architecture, startup decisions, security, research |
+| Classification | Codex Mode | When to use |
+|---------------|-----------|-------------|
+| **Trivial** | *skip* | Greetings, chat, boilerplate |
+| **Standard** | Review (Thinking) | Coding, bug fixes, learning |
+| **Research** | Adversarial Review (Pro) | Architecture, security, startup decisions |
 
-### Max retries
-- Up to **6 iteration rounds** to achieve 2 consecutive agreements (Aegean stability)
-- Early exit on 2 consecutive agreements
-- Round 6 without agreement -> return BOTH answers, DO NOT fabricate consensus
+### The heuristic
+"If the answer would change your behavior or be committed to git, run the review. Otherwise don't."
+
+---
+
+## Max Retries
+- Up to **6 rounds** for 2 consecutive agreements
+- Early exit on Aegean stability
+- Round 6 without agreement → return BOTH answers honestly

@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================
-# STOP HOOK: Verification Gate (v3 — phase-aware enforcement)
+# STOP HOOK: Verification Gate (v4 — work-first, review-after)
 # ============================================================
-# PURPOSE: Blocks Claude Code from finishing ANY task unless
-#          verification is complete or an escape hatch is active.
+# PURPOSE: Lightweight gate that ensures Claude classified every
+#          query and ran verification for non-trivial work.
 #
-# PHASES (non-trivial tasks):
-#   classifying  — Claude showed classification, waiting for user
-#   researching  — gathering citations, user reviewing sources
-#   iterating    — Codex loop in progress, mid-round
-#   complete     — loop done (2 agreements or 6 rounds)
-#
-#   Temporary phases (classifying/researching/iterating) allow
-#   Claude to pause for user interaction mid-flow. But the ACTUAL
-#   answer cannot be delivered until phase=complete with full
-#   proof-of-work.
+#          v4 CHANGE: Claude works freely first. Codex review
+#          happens AFTER work is done via /verify command.
+#          This hook just checks the state file is valid.
 #
 # INSTALL: Copy to ~/.claude/hooks/stop-verify-gate.sh
 #          Then add to ~/.claude/settings.json under hooks.Stop
@@ -55,169 +48,106 @@ fi
 
 # --- Check state file ---
 STATE=".claude/verify-state.json"
-LOCAL_LOG=".claude/verify-log.jsonl"
 
 if [[ ! -f "$STATE" ]]; then
   log_event "block" "no-state-file"
-  echo "BLOCK: No verification state found. Run verify-consensus or classify this task." >&2
-  echo "Escape: touch .claude/verify-skip" >&2
+  echo "BLOCK: No verification state found. Write .claude/verify-state.json with classification." >&2
+  echo "RETRY: Classify as trivial | standard | research" >&2
   exit 2
 fi
 
-# ============================================================
-# CLASSIFICATION VALIDATION
-# ============================================================
-# Every query MUST have a valid complexity. Reject unknown values.
-
+# --- Validate complexity ---
 complexity=$(jq -r '.complexity // ""' "$STATE" 2>/dev/null)
 trivial=$(jq -r '.trivial // false' "$STATE" 2>/dev/null)
 
-# --- Validate complexity is a known value ---
 case "$complexity" in
-  trivial|standard|research) ;;  # valid
+  trivial|standard|research) ;;
   *)
     log_event "block" "invalid-complexity:$complexity"
     echo "BLOCK: Invalid complexity '$complexity'." >&2
     echo "RETRY: Reclassify with exactly one of: trivial | standard | research" >&2
-    echo "Rewrite .claude/verify-state.json with a valid complexity and try again." >&2
     exit 2
     ;;
 esac
 
-# --- Validate trivial flag matches complexity ---
+# --- Validate trivial consistency ---
 if [[ "$complexity" == "trivial" && "$trivial" != "true" ]]; then
-  log_event "block" "complexity-trivial-mismatch:complexity=trivial,trivial=$trivial"
-  echo "BLOCK: complexity=trivial but trivial flag is not true." >&2
-  echo "RETRY: Set trivial=true when complexity=trivial, or reclassify as: standard | research" >&2
+  log_event "block" "trivial-mismatch:complexity=trivial,trivial=$trivial"
+  echo "BLOCK: complexity=trivial but trivial is not true." >&2
+  echo "RETRY: Set trivial=true, or reclassify as: standard | research" >&2
   exit 2
 fi
 if [[ "$complexity" != "trivial" && "$trivial" == "true" ]]; then
-  log_event "block" "complexity-trivial-mismatch:complexity=$complexity,trivial=true"
-  echo "BLOCK: complexity=$complexity but trivial=true. Cannot mark non-trivial as trivial." >&2
-  echo "RETRY: Set trivial=false for $complexity, or reclassify as: trivial (only if genuinely trivial)" >&2
+  log_event "block" "trivial-mismatch:complexity=$complexity,trivial=true"
+  echo "BLOCK: complexity=$complexity but trivial=true." >&2
+  echo "RETRY: Set trivial=false, or reclassify as trivial (only if genuinely trivial)" >&2
   exit 2
 fi
 
-# --- Trivial: allow ---
+# --- Trivial: allow immediately ---
 if [[ "$trivial" == "true" ]]; then
   log_event "allow" "classified:trivial"
   exit 0
 fi
 
 # ============================================================
-# PHASE VALIDATION + ENFORCEMENT (non-trivial tasks only)
+# NON-TRIVIAL: Check that Codex review was run
 # ============================================================
 
-phase=$(jq -r '.phase // ""' "$STATE" 2>/dev/null)
+LOCAL_LOG=".claude/verify-log.jsonl"
+status=$(jq -r '.status // ""' "$STATE" 2>/dev/null)
 
-# --- Validate phase is a known value ---
-case "$phase" in
-  classifying|researching|iterating|complete) ;;  # valid
-  "")
-    log_event "block" "missing-phase:complexity=$complexity"
-    echo "BLOCK: Non-trivial task (complexity=$complexity) has no phase." >&2
-    echo "RETRY: Add phase to .claude/verify-state.json. Pick exactly one of: classifying | researching | iterating | complete" >&2
-    exit 2
-    ;;
-  *)
-    log_event "block" "invalid-phase:$phase"
-    echo "BLOCK: Invalid phase '$phase'." >&2
-    echo "RETRY: Rewrite phase in .claude/verify-state.json. Pick exactly one of: classifying | researching | iterating | complete" >&2
-    exit 2
-    ;;
-esac
-
-# --- Temporary phases: allow mid-flow stops ---
-# These let Claude pause to show work to the user between steps.
-# The actual answer CANNOT be delivered in these phases.
-case "$phase" in
-  classifying)
-    log_event "allow" "phase:classifying"
-    exit 0
-    ;;
-  researching)
-    log_event "allow" "phase:researching"
-    exit 0
-    ;;
-  iterating)
-    # Allow mid-iteration stops ONLY if at least starting the loop
-    # (iteration >= 1 means at least one round attempted)
-    iter=$(jq -r '.iteration // 0' "$STATE" 2>/dev/null)
-    if [[ "$iter" -ge 0 ]]; then
-      log_event "allow" "phase:iterating,iter=$iter"
+# --- Status: verified = review completed successfully ---
+if [[ "$status" == "verified" ]]; then
+  # Cross-check: log must have at least 1 iteration with codex hash
+  if [[ -f "$LOCAL_LOG" ]]; then
+    verified_count=$(jq -s '[.[] | select(.event == "iteration" and .codex_response_hash != null and .codex_response_hash != "")] | length' "$LOCAL_LOG" 2>/dev/null)
+    verified_count=${verified_count:-0}
+    if [[ "$verified_count" -ge 1 ]]; then
+      log_event "allow" "verified:iterations=$verified_count"
       exit 0
     fi
-    ;;
-esac
-
-# --- Phase: complete — full structural verification required ---
-# If phase=complete OR no phase set, we require full proof-of-work.
-
-# --- Check 1: iteration log must exist ---
-if [[ ! -f "$LOCAL_LOG" ]]; then
-  log_event "block" "no-iteration-log"
-  echo "BLOCK: No iteration log found (.claude/verify-log.jsonl). Codex was never called." >&2
-  echo "Non-trivial tasks MUST run Codex verification. Set phase to classifying/researching/iterating if mid-flow." >&2
+  fi
+  log_event "block" "status-verified-but-no-proof"
+  echo "BLOCK: Status says verified but no Codex proof-of-work in log." >&2
   exit 2
 fi
 
-# --- Check 2: count iteration entries with codex_response_hash ---
-verified_iterations=$(jq -s '[.[] | select(.event == "iteration" and .codex_response_hash != null and .codex_response_hash != "")] | length' "$LOCAL_LOG" 2>/dev/null)
-verified_iterations=${verified_iterations:-0}
-
-if [[ "$verified_iterations" -eq 0 ]]; then
-  log_event "block" "no-codex-proof"
-  echo "BLOCK: No iteration entries with codex_response_hash found. Codex was never called." >&2
-  echo "Each iteration must include a hash of the Codex response as proof-of-work." >&2
-  exit 2
-fi
-
-# --- Check 3: state iteration count must match log entries ---
-state_iter=$(jq -r '.iteration // 0' "$STATE" 2>/dev/null)
-total_log_iterations=$(jq -s '[.[] | select(.event == "iteration")] | length' "$LOCAL_LOG" 2>/dev/null)
-total_log_iterations=${total_log_iterations:-0}
-
-if [[ "$state_iter" -gt 0 && "$total_log_iterations" -lt "$state_iter" ]]; then
-  log_event "block" "iteration-mismatch:state=$state_iter,log=$total_log_iterations"
-  echo "BLOCK: State claims $state_iter iterations but log only has $total_log_iterations entries." >&2
-  exit 2
-fi
-
-# --- Check 4: iteration cap ---
-if [[ "$state_iter" -ge 6 ]]; then
-  log_event "allow" "iteration-cap:$state_iter,verified=$verified_iterations"
+# --- Status: working = Claude is still working, allow ---
+if [[ "$status" == "working" ]]; then
+  log_event "allow" "status:working"
   exit 0
 fi
 
-# --- Check 5: 2 consecutive agreements (Aegean stability) ---
-history_len=$(jq -r '.history | length' "$STATE" 2>/dev/null)
-if [[ "$history_len" -ge 2 ]]; then
-  last_two_agreed=$(jq -r '
-    .history | reverse | [limit(2; .[])] |
-    map(.agreed) | all
-  ' "$STATE" 2>/dev/null)
-
-  if [[ "$last_two_agreed" == "true" ]]; then
-    # Cross-check: the last 2 log entries must also show agreed=true
-    log_last_two_agreed=$(jq -s '
-      [.[] | select(.event == "iteration")] | reverse | [limit(2; .[])] |
-      map(.agreed) | all
-    ' "$LOCAL_LOG" 2>/dev/null)
-
-    if [[ "$log_last_two_agreed" == "true" ]]; then
-      log_event "allow" "aegean-stable:iter=$state_iter,verified=$verified_iterations"
-      exit 0
-    else
-      log_event "block" "aegean-mismatch:state-says-agreed,log-disagrees"
-      echo "BLOCK: State claims 2 consecutive agreements but iteration log disagrees." >&2
-      exit 2
-    fi
-  fi
+# --- Status: reviewing = Codex review in progress, allow ---
+if [[ "$status" == "reviewing" ]]; then
+  log_event "allow" "status:reviewing"
+  exit 0
 fi
 
-# --- Block: verification not complete ---
-log_event "block" "incomplete:iter=$state_iter,verified=$verified_iterations,history=$history_len"
-echo "BLOCK: Verification incomplete. iteration=$state_iter, verified=$verified_iterations." >&2
-echo "Need 2 consecutive agreements or 6 rounds with Codex proof-of-work." >&2
-echo "Or set phase to classifying/researching/iterating if mid-flow." >&2
+# --- Status: capped = 6 rounds without consensus, allow ---
+if [[ "$status" == "capped" ]]; then
+  if [[ -f "$LOCAL_LOG" ]]; then
+    verified_count=$(jq -s '[.[] | select(.event == "iteration" and .codex_response_hash != null)] | length' "$LOCAL_LOG" 2>/dev/null)
+    if [[ "${verified_count:-0}" -ge 6 ]]; then
+      log_event "allow" "capped:iterations=$verified_count"
+      exit 0
+    fi
+  fi
+  log_event "block" "capped-but-insufficient-iterations"
+  echo "BLOCK: Status says capped but fewer than 6 verified iterations in log." >&2
+  exit 2
+fi
+
+# --- No status or unknown status ---
+if [[ -z "$status" ]]; then
+  log_event "block" "no-status"
+  echo "BLOCK: Non-trivial task has no status. Claude must set status." >&2
+  echo "RETRY: Set status to 'working' while working, then run /verify when done." >&2
+  exit 2
+fi
+
+log_event "block" "unknown-status:$status"
+echo "BLOCK: Unknown status '$status'." >&2
+echo "RETRY: Valid statuses: working | reviewing | verified | capped" >&2
 exit 2
