@@ -73,6 +73,26 @@ Present the classification to the user. Wait for confirmation before proceeding.
 
 ---
 
+## Classification Validation (enforced by hook)
+
+The stop hook validates EVERY state file. Invalid values = BLOCK.
+
+**Complexity** must be exactly one of: `trivial`, `standard`, `research`.
+Any other value (empty, typo, made-up) is rejected.
+
+**Trivial consistency:**
+- If `complexity: "trivial"` then `trivial` MUST be `true`
+- If `complexity: "standard"` or `"research"` then `trivial` MUST be `false`
+- Mismatch = BLOCK (prevents marking real queries as trivial)
+
+**Phase** must be exactly one of: `classifying`, `researching`, `iterating`, `complete`.
+- Non-trivial tasks with missing or unknown phase = BLOCK
+- Trivial tasks ignore phase entirely
+
+Nothing can fall outside these categories. The hook rejects anything unknown.
+
+---
+
 ## Phase System (v3)
 
 Non-trivial tasks move through phases. The stop hook allows mid-flow
