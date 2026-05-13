@@ -44,4 +44,6 @@ else
   echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"cwd\":\"$(pwd)\",\"verified\":true,\"parse_error\":true}" >> "$GLOBAL_LOG"
 fi
 
-rm -f "$STATE"
+# NOTE: Do NOT delete state file here. The stop gate hook needs it
+# to persist across multiple stops within the same conversation.
+# State file is ephemeral by design — it gets overwritten on each new query.
